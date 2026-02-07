@@ -378,14 +378,24 @@ MULTI-ITEM examples:
 - "PS5 bundle with 2 controllers and 4 games" → YES, multiple items
 - "Gaming PC: RTX 4080, i9-13900K, 64GB RAM, 2TB NVMe" → YES, extract each component!
 
-PC/COMPUTER LISTINGS - IMPORTANT:
-If a PC listing includes specs, list the PC FIRST, then extract EACH component:
-1. The PC itself (e.g., "Gaming PC RTX 4080 i9-13900K 64GB")
-2. CPU (e.g., "Intel Core i9-13900K")
-3. GPU (e.g., "EVGA RTX 4080 FTW3 Ultra") 
-4. RAM (e.g., "Corsair Vengeance 64GB DDR5")
-5. Storage (e.g., "Samsung 990 Pro 2TB NVMe")
-6. Motherboard, PSU, Case, Cooler if mentioned
+PC/COMPUTER LISTINGS - ALWAYS EXTRACT COMPONENTS:
+If you see specs like "RTX 4080", "i9-13900K", "64GB RAM", "2TB SSD" - these ARE multiple items!
+
+Example: "Gaming PC RTX 4080 i9-13900K 64GB 2TB"
+→ MULTI_ITEM: YES
+→ ITEMS:
+- Gaming PC RTX 4080 i9-13900K 64GB
+- NVIDIA RTX 4080
+- Intel Core i9-13900K
+- 64GB DDR5 RAM
+- 2TB NVMe SSD
+
+Extract EVERY component you can identify:
+- GPU: RTX/GTX/RX models → "NVIDIA RTX 4080" or "AMD RX 7900"
+- CPU: i9/i7/i5/Ryzen → "Intel Core i9-13900K" or "AMD Ryzen 9 7950X"
+- RAM: 16GB/32GB/64GB → "32GB DDR5 RAM"
+- Storage: 1TB/2TB SSD/NVMe → "2TB NVMe SSD"
+- Motherboard, PSU, Case, Cooler if specifically named
 
 SINGLE ITEM examples:
 - "iPhone 13 with case and charger" → NO (accessories bundled)
@@ -399,9 +409,14 @@ IMPORTANT: When listing items, be SPECIFIC with full product names:
 
 Use info from title AND description to get specific names.
 
-Respond with:
+Respond with ONLY this format (no explanations, no notes):
 MULTI_ITEM: YES or NO
-ITEMS: [List each item with FULL SPECIFIC product name, one per line]"""
+ITEMS:
+- Item 1 name
+- Item 2 name
+- etc.
+
+Do NOT include notes, explanations, or commentary - ONLY product names."""
 
         response = await self._call_ollama(self.text_model, prompt)
         
@@ -428,6 +443,21 @@ ITEMS: [List each item with FULL SPECIFIC product name, one per line]"""
                 clean = line.lstrip('•-*123456789. ')
                 if clean:
                     items.append(clean)
+        
+        # Filter out garbage responses (explanations, notes, etc.)
+        garbage_starts = ['note:', 'note ', 'the title', 'the listing', 'this listing', 
+                         'however', 'unfortunately', 'i cannot', 'i could not',
+                         'based on', 'it appears', 'there is', 'there are']
+        filtered_items = []
+        for item in items:
+            item_lower = item.lower().strip()
+            if any(item_lower.startswith(g) for g in garbage_starts):
+                continue
+            if len(item) < 3:  # Too short to be a real item
+                continue
+            filtered_items.append(item)
+        
+        items = filtered_items
         
         # If not multi but we have no items, use title as single item
         if not items:
