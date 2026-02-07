@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Config with secrets
+config.json
+scrapedface.json
+
+# Reports (generated)
+reports/*.txt
+reports/*.md
+reports/*.json
+reports/*.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Screenshots
+*.png
+*.jpg
+!/docs/*.png
+!/docs/*.jpg
+
+# Memory/state files
+memory/
+*.bak
