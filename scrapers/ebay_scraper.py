@@ -28,7 +28,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 sys.path.append('..')
-from utils.stealth_helpers import human_delay, page_load_delay, scroll_delay, get_stealth_spawn_options
+from utils.stealth_helpers import (
+    human_delay, page_load_delay, scroll_delay, get_stealth_spawn_options,
+    _random_mouse_move, simulate_human_browsing, get_random_typing_delay_ms,
+    type_like_human
+)
 
 
 @dataclass
@@ -303,26 +307,152 @@ class EbayScraper:
         self.instance_id = None
     
     async def _scroll_down(self, pixels: int = None):
-        """Scroll down the page using stealth browser's native scroll"""
+        """Scroll down the page with smooth behavior"""
+        import random
+        if pixels is None:
+            pixels = int(random.gauss(200, 80))
+            pixels = max(80, min(pixels, 400))
+        await self._execute_js(f"window.scrollBy({{top: {pixels}, behavior: 'smooth'}});")
+        await asyncio.sleep(random.uniform(0.3, 0.8))
+    
+    async def _human_search_ebay(self, query: str, condition: str = "used") -> bool:
+        """Type search query into eBay's search box like a human."""
         import random
         try:
-            if pixels is None:
-                pixels = 400 + int(200 * random.random())  # 400-600 pixels
+            # eBay search box selectors
+            search_selectors = [
+                'input#gh-ac',  # eBay's main search input
+                'input[type="text"][name="_nkw"]',
+                'input[aria-label*="Search"]',
+                'input[placeholder*="Search"]',
+            ]
             
-            await asyncio.wait_for(
-                self.session.call_tool(
-                    "scroll_page",
-                    arguments={
-                        "instance_id": self.instance_id,
-                        "direction": "down",
-                        "amount": pixels
+            # Click the search input
+            clicked = False
+            for selector in search_selectors:
+                try:
+                    result = await asyncio.wait_for(
+                        self.session.call_tool(
+                            "click_element",
+                            arguments={
+                                "instance_id": self.instance_id,
+                                "selector": selector,
+                                "timeout": 3000
+                            }
+                        ),
+                        timeout=5
+                    )
+                    if result and not (hasattr(result, 'isError') and result.isError):
+                        clicked = True
+                        break
+                except:
+                    continue
+            
+            if not clicked:
+                print("      ✗ Could not find eBay search input")
+                return False
+            
+            await asyncio.sleep(random.uniform(0.3, 0.7))
+            
+            # Type the query character by character
+            for selector in search_selectors:
+                try:
+                    success = await type_like_human(
+                        self.session, self.instance_id, selector, query, clear_first=True
+                    )
+                    if success:
+                        print(f"      ✓ Typed: {query}")
+                        break
+                except:
+                    continue
+            
+            await asyncio.sleep(random.uniform(0.2, 0.5))
+            
+            # Press Enter to search
+            await self._execute_js("""
+                const input = document.querySelector('#gh-ac') || 
+                              document.querySelector('input[name="_nkw"]');
+                if (input) {
+                    input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+                    input.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+                }
+                // Also submit the form
+                const form = input ? input.closest('form') : null;
+                if (form) form.submit();
+            """)
+            
+            print("      ✓ Submitted search")
+            await asyncio.sleep(random.uniform(2.0, 4.0))
+            
+            # Now we need to filter to "Sold" items — click the sold filter
+            # eBay has a "Sold Items" checkbox in the left sidebar
+            await self._click_sold_filter()
+            
+            return True
+        except Exception as e:
+            print(f"      ✗ eBay search error: {e}")
+            return False
+    
+    async def _click_sold_filter(self):
+        """Click the 'Sold Items' filter on eBay search results."""
+        import random
+        try:
+            # Try clicking "Sold Items" checkbox/link
+            sold_js = """
+                (() => {
+                    // Look for "Sold Items" or "Completed Items" link/checkbox
+                    const links = document.querySelectorAll('a, span, label');
+                    for (const el of links) {
+                        const text = el.textContent.trim().toLowerCase();
+                        if (text === 'sold items' || text === 'sold') {
+                            el.click();
+                            return 'clicked_sold';
+                        }
                     }
-                ),
-                timeout=5
-            )
+                    // Try checkbox approach
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+                    for (const cb of checkboxes) {
+                        const label = cb.closest('label') || cb.parentElement;
+                        if (label && label.textContent.toLowerCase().includes('sold')) {
+                            cb.click();
+                            return 'clicked_checkbox';
+                        }
+                    }
+                    return 'not_found';
+                })();
+            """
+            result = await self._execute_js(sold_js)
+            if 'clicked' in str(result):
+                print("      ✓ Applied 'Sold Items' filter")
+                await asyncio.sleep(random.uniform(2.0, 3.5))
+            else:
+                print("      ⚠️ Could not find Sold filter — results may include active listings")
         except:
-            # Fallback to JS scroll
-            await self._execute_js(f"window.scrollBy(0, {pixels})")
+            pass
+    
+    async def _scroll_results(self):
+        """Scroll through eBay results like a human browsing."""
+        import random
+        spurts = random.randint(2, 4)
+        for i in range(spurts):
+            amount = int(random.gauss(200, 80))
+            amount = max(80, min(amount, 400))
+            await self._execute_js(f"window.scrollBy({{top: {amount}, behavior: 'smooth'}});")
+            
+            if random.random() < 0.3:
+                await asyncio.sleep(random.uniform(1.5, 3.5))
+            else:
+                await asyncio.sleep(random.uniform(0.4, 1.0))
+            
+            # 10% scroll back
+            if random.random() < 0.10:
+                back = random.randint(60, 180)
+                await self._execute_js(f"window.scrollBy({{top: -{back}, behavior: 'smooth'}});")
+                await asyncio.sleep(random.uniform(0.4, 1.0))
+            
+            # Mouse movement
+            if self.session and self.instance_id:
+                await _random_mouse_move(self.session, self.instance_id)
     
     def _parse_listings_from_text(self, text: str) -> list[EbaySoldItem]:
         """Parse sold listings from eBay page text content.
@@ -694,23 +824,30 @@ class EbayScraper:
                     # Build URL
                     url = self.build_sold_url(query, condition, min_price, max_price)
                     
-                    # Warm-up: Visit eBay homepage first to look more natural
-                    # This helps avoid captcha/bot detection
+                    # Visit eBay homepage first — look around like a human
                     print(f"🔍 Searching eBay: {query}")
                     try:
-                        await self._navigate("https://www.ebay.com", timeout=10)
-                        await asyncio.sleep(1)  # Brief pause on homepage
+                        await self._navigate("https://www.ebay.com", timeout=15)
+                        await page_load_delay()
+                        await _random_mouse_move(session, self.instance_id)
                     except:
-                        pass  # Homepage visit is optional
+                        pass
                     
-                    # Now navigate to actual search
-                    print(f"   📍 Loading search results...")
-                    await human_delay(0.3, 0.6)
-                    if not await self._navigate(url, timeout=25):
-                        return None
+                    # Type the search query into eBay's search box
+                    print(f"   🔍 Typing search query...")
+                    searched = await self._human_search_ebay(query, condition)
                     
-                    # Wait for search results to load
-                    await asyncio.sleep(3)
+                    if not searched:
+                        # Fall back to direct URL if search box fails
+                        print(f"   ⚠️ Search box failed, using direct URL...")
+                        if not await self._navigate(url, timeout=25):
+                            return None
+                    
+                    # Browse results like a human
+                    await page_load_delay()
+                    await _random_mouse_move(session, self.instance_id)
+                    await self._scroll_results()
+                    await simulate_human_browsing(session, self.instance_id)
                     
                     # Get page content (do this before browser connection becomes unstable)
                     print("   📄 Extracting page content...")
