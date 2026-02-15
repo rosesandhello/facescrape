@@ -187,22 +187,16 @@ class MarketplaceScraper:
                             print("\n❌ Login timeout (3 min) - please restart and try again")
                             return []
                     
-                    # Search like a human — type into the search box most of the time,
-                    # fall back to direct URL if search box isn't found
-                    searched_via_box = False
-                    if random.random() < 0.75:  # 75% of the time, use the search box
-                        print(f"   🔍 Searching via search box...")
-                        # Mouse around the page first like a human looking for the search box
-                        await _random_mouse_move(session, self.instance_id)
-                        await human_delay(0.5, 1.5)
-                        searched_via_box = await self._human_search(query)
-                    
-                    if not searched_via_box:
-                        # Fall back to direct URL (also needed for sort parameter)
-                        url = self.build_search_url(query, zip_code, radius_miles, sort_by_price=sort_by_price)
-                        sort_mode = "lowest price first" if sort_by_price else "newest first"
-                        print(f"   🔍 Loading search URL ({sort_mode})...")
-                        await self._navigate(url)
+                    # Always search like a human — type into the search box
+                    print(f"   🔍 Searching via search box...")
+                    await _random_mouse_move(session, self.instance_id)
+                    await human_delay(0.5, 1.5)
+                    searched = await self._human_search(query)
+                    if not searched:
+                        print(f"   ⚠️ Search box not found, retrying after page reload...")
+                        await self._navigate(mp_url)
+                        await page_load_delay()
+                        await self._human_search(query)
                     
                     await page_load_delay()
                     
@@ -373,16 +367,15 @@ class MarketplaceScraper:
                             # Simulate some human fidgeting
                             await simulate_human_browsing(session, self.instance_id)
                         
-                        # Search like a human — type into the search box most of the time
-                        searched_via_box = False
-                        if random.random() < 0.75:
-                            await _random_mouse_move(session, self.instance_id)
-                            await human_delay(0.5, 1.5)
-                            searched_via_box = await self._human_search(query)
-                        
-                        if not searched_via_box:
-                            url = self.build_search_url(query, zip_code, radius_miles, sort_by_price=sort_by_price)
-                            await self._navigate(url)
+                        # Always search like a human — type into the search box
+                        await _random_mouse_move(session, self.instance_id)
+                        await human_delay(0.5, 1.5)
+                        searched = await self._human_search(query)
+                        if not searched:
+                            print(f"   ⚠️ Search box not found, retrying after page reload...")
+                            await self._navigate(mp_url)
+                            await page_load_delay()
+                            await self._human_search(query)
                         
                         await page_load_delay()
                         

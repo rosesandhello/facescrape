@@ -43,8 +43,8 @@ def find_stealth_browser() -> str:
 
 
 def get_default_user_data_dir() -> str:
-    """Get default browser profile directory"""
-    return "/tmp/scrapedface-profile"
+    """Get default browser profile directory (persistent across reboots)"""
+    return str(Path.home() / ".scrapedface" / "chrome-profile")
 
 
 def get_config_path() -> Path:
