@@ -676,20 +676,26 @@ class MarketplaceScraper:
 
     async def _scroll_down(self):
         """Scroll down in human-like spurts with occasional scroll-back."""
-        # 2-4 spurts of scrolling, like a human flicking through listings
-        spurts = random.randint(2, 4)
+        # 3-6 spurts — each is like 1-3 mouse wheel ticks (~100px per tick)
+        spurts = random.randint(3, 6)
         for i in range(spurts):
-            amount = random.randint(250, 600)
+            # Gaussian centered around 200px — most scrolls are small,
+            # occasional bigger flicks
+            amount = int(random.gauss(200, 80))
+            amount = max(80, min(amount, 400))  # clamp to realistic range
             await self._execute_js(self._build_scroll_js(amount))
             
-            # Wait for smooth animation + "reading" time
-            await asyncio.sleep(random.uniform(0.6, 2.0))
+            # Pause between spurts — sometimes quick (scanning), sometimes slow (reading)
+            if random.random() < 0.3:
+                await asyncio.sleep(random.uniform(1.5, 4.0))  # stopped to read a listing
+            else:
+                await asyncio.sleep(random.uniform(0.3, 1.0))  # quick scan
             
             # 10% chance to scroll back up a little (second-guessing, re-reading)
             if random.random() < 0.10:
-                back = random.randint(100, 300)
+                back = random.randint(60, 180)
                 await self._execute_js(self._build_scroll_js(-back))
-                await asyncio.sleep(random.uniform(0.4, 1.2))
+                await asyncio.sleep(random.uniform(0.5, 1.5))
     
     async def _humanize_results_browsing(self):
         """
