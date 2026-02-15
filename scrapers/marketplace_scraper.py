@@ -650,32 +650,42 @@ class MarketplaceScraper:
             return f"Error: {e}"
     
     async def _scroll_down(self):
-        """Scroll down to load more content using native smooth scroll"""
+        """Scroll down to load more content — handles FB's scrollable containers"""
         amount = random.randint(400, 900)
-        try:
-            result = await asyncio.wait_for(
-                self.session.call_tool(
-                    "scroll_page",
-                    arguments={
-                        "instance_id": self.instance_id,
-                        "direction": "down",
-                        "amount": amount,
-                        "smooth": True
-                    }
-                ),
-                timeout=5
-            )
-            # Check if the tool call actually succeeded
-            if hasattr(result, 'isError') and result.isError:
-                raise Exception(f"scroll_page failed: {result.content}")
-        except Exception as e:
-            # Fallback to JS smooth scroll
-            print(f"      ⚠️ scroll_page failed ({e}), using JS fallback")
-            await self._execute_js(f"""
-                window.scrollBy({{top: {amount}, behavior: 'smooth'}});
-            """)
-        # Small delay to let smooth scroll complete visually
-        await asyncio.sleep(random.uniform(0.3, 0.8))
+        # FB Marketplace often uses a scrollable container div instead of window.
+        # Try the container first, fall back to window.
+        scroll_js = f"""
+            (() => {{
+                const amount = {amount};
+                // FB uses [role="main"] or specific scrollable divs
+                const candidates = [
+                    document.querySelector('[role="main"]'),
+                    document.querySelector('div[style*="overflow"]'),
+                    document.querySelector('div[class*="x1hc1fzr"]'),  // common FB scroll container
+                    document.scrollingElement,
+                    document.documentElement
+                ];
+                
+                for (const el of candidates) {{
+                    if (!el) continue;
+                    const before = el.scrollTop;
+                    el.scrollBy({{top: amount, behavior: 'smooth'}});
+                    // If scrollTop changed (or will change due to smooth), use this element
+                    // For smooth scroll, we can't check immediately, so just try the first valid one
+                    if (el.scrollHeight > el.clientHeight) {{
+                        return JSON.stringify({{scrolled: true, element: el.tagName || 'unknown', scrollTop: before}});
+                    }}
+                }}
+                
+                // Last resort: window scroll
+                window.scrollBy({{top: amount, behavior: 'smooth'}});
+                return JSON.stringify({{scrolled: true, element: 'window', scrollTop: window.scrollY}});
+            }})();
+        """
+        result = await self._execute_js(scroll_js)
+        print(f"      📜 Scroll: {result[:80] if result else 'no result'}")
+        # Wait for smooth scroll animation
+        await asyncio.sleep(random.uniform(0.5, 1.2))
     
     async def _humanize_results_browsing(self):
         """
