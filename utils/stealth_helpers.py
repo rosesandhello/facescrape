@@ -217,8 +217,9 @@ async def warm_profile(session, instance_id: str, force: bool = False):
 async def _random_mouse_move(session, instance_id: str):
     """
     Simulate realistic mouse movements with Bézier-like curves.
-    Real humans don't teleport the cursor — they move in smooth arcs
-    with slight acceleration/deceleration.
+    Uses PointerEvent + MouseEvent on the actual element under the cursor
+    (not just document), which is what real browsers fire. Includes
+    mouseover/mouseenter/mouseleave transitions between elements.
     """
     try:
         # Start from a plausible position
@@ -241,33 +242,72 @@ async def _random_mouse_move(session, instance_id: str):
             ctrl_x = (cx + tx) / 2 + random.gauss(0, 80)
             ctrl_y = (cy + ty) / 2 + random.gauss(0, 60)
             
+            # Build all points for this arc, dispatch in one script call
+            # to reduce round-trips (but still with delays between batches)
+            batch_size = random.randint(2, 4)
+            points = []
             for s in range(steps):
                 t = (s + 1) / steps
-                # Quadratic Bézier interpolation
                 ix = int((1 - t)**2 * cx + 2 * (1 - t) * t * ctrl_x + t**2 * tx)
                 iy = int((1 - t)**2 * cy + 2 * (1 - t) * t * ctrl_y + t**2 * ty)
+                points.append((ix, iy))
+            
+            # Dispatch in small batches with delays between them
+            for batch_start in range(0, len(points), batch_size):
+                batch = points[batch_start:batch_start + batch_size]
+                # Build JS that fires events on the actual element at each coordinate
+                js_parts = []
+                for (px, py) in batch:
+                    js_parts.append(f"""
+                        (() => {{
+                            const el = document.elementFromPoint({px}, {py}) || document;
+                            const opts = {{
+                                clientX: {px}, clientY: {py},
+                                screenX: {px}, screenY: {py},
+                                bubbles: true, cancelable: true,
+                                pointerId: 1, pointerType: 'mouse',
+                                isPrimary: true, width: 1, height: 1
+                            }};
+                            el.dispatchEvent(new PointerEvent('pointermove', opts));
+                            el.dispatchEvent(new MouseEvent('mousemove', opts));
+                        }})();
+                    """)
                 
                 await session.call_tool(
                     "execute_script",
                     arguments={
                         "instance_id": instance_id,
-                        "script": f"""
-                            document.dispatchEvent(new MouseEvent('mousemove', {{
-                                clientX: {ix}, clientY: {iy},
-                                bubbles: true
-                            }}));
-                        """
+                        "script": "\n".join(js_parts)
                     }
                 )
+                
                 # Faster in the middle of the arc, slower at endpoints
-                # (mimics human acceleration curve)
-                speed_factor = 1.0 - 0.6 * abs(t - 0.5)  # slower near 0 and 1
-                await asyncio.sleep(random.uniform(0.01, 0.05) * speed_factor + 0.005)
+                t_mid = (batch_start + batch_size / 2) / max(len(points), 1)
+                speed_factor = 1.0 - 0.6 * abs(t_mid - 0.5)
+                await asyncio.sleep(random.uniform(0.02, 0.08) * speed_factor + 0.01)
             
             cx, cy = tx, ty
             
             # Pause between movements (human hesitation/reading)
             await asyncio.sleep(random.uniform(0.1, 0.8))
+            
+            # Sometimes hover over an element briefly (mouseover/mouseenter)
+            if random.random() < 0.3:
+                await session.call_tool(
+                    "execute_script",
+                    arguments={
+                        "instance_id": instance_id,
+                        "script": f"""
+                            const el = document.elementFromPoint({tx}, {ty});
+                            if (el) {{
+                                const opts = {{clientX: {tx}, clientY: {ty}, bubbles: true, cancelable: true}};
+                                el.dispatchEvent(new MouseEvent('mouseover', opts));
+                                el.dispatchEvent(new MouseEvent('mouseenter', {{...opts, bubbles: false}}));
+                            }}
+                        """
+                    }
+                )
+                await asyncio.sleep(random.uniform(0.2, 0.6))
     except:
         pass
 
