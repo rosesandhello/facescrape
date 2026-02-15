@@ -25,9 +25,9 @@ def find_stealth_browser() -> str:
     Returns path or empty string if not found.
     """
     candidates = [
-        Path.home() / "stealth-browser-mcp" / "src" / "server.py",
-        get_project_root().parent / "stealth-browser-mcp" / "src" / "server.py",
         get_project_root() / "stealth-browser-mcp" / "src" / "server.py",
+        get_project_root().parent / "stealth-browser-mcp" / "src" / "server.py",
+        Path.home() / "stealth-browser-mcp" / "src" / "server.py",
     ]
     
     # Also check STEALTH_BROWSER_PATH env var

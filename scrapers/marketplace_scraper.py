@@ -25,6 +25,7 @@ from utils.stealth_helpers import (
     human_delay, typing_delay, page_load_delay, scroll_delay, between_search_delay,
     get_stealth_spawn_options, get_random_typing_delay_ms, type_like_human,
     warm_profile, save_cookies, simulate_human_browsing, ensure_profile_dir,
+    _random_mouse_move, _random_scroll,
     DEFAULT_PROFILE_DIR
 )
 
@@ -186,18 +187,28 @@ class MarketplaceScraper:
                             print("\n❌ Login timeout (3 min) - please restart and try again")
                             return []
                     
-                    # Use direct URL with sort parameter (search box doesn't support sorting)
-                    url = self.build_search_url(query, zip_code, radius_miles, sort_by_price=sort_by_price)
-                    sort_mode = "lowest price first" if sort_by_price else "newest first"
-                    print(f"   🔍 Loading search URL ({sort_mode})...")
-                    await self._navigate(url)
+                    # Search like a human — type into the search box most of the time,
+                    # fall back to direct URL if search box isn't found
+                    searched_via_box = False
+                    if random.random() < 0.75:  # 75% of the time, use the search box
+                        print(f"   🔍 Searching via search box...")
+                        # Mouse around the page first like a human looking for the search box
+                        await _random_mouse_move(session, self.instance_id)
+                        await human_delay(0.5, 1.5)
+                        searched_via_box = await self._human_search(query)
+                    
+                    if not searched_via_box:
+                        # Fall back to direct URL (also needed for sort parameter)
+                        url = self.build_search_url(query, zip_code, radius_miles, sort_by_price=sort_by_price)
+                        sort_mode = "lowest price first" if sort_by_price else "newest first"
+                        print(f"   🔍 Loading search URL ({sort_mode})...")
+                        await self._navigate(url)
+                    
                     await page_load_delay()
                     
-                    # Scroll down to trigger lazy loading (with human-like pauses)
-                    print("   📜 Scrolling to trigger content load...")
-                    for _ in range(3):
-                        await self._scroll_down()
-                        await scroll_delay()  # Random delay between scrolls
+                    # Browse results like a human — mouse movements, scrolling, pausing
+                    print("   📜 Browsing results...")
+                    await self._humanize_results_browsing()
                     
                     # Wait for listings using proper wait_for_element
                     print("   ⏳ Waiting for listings to appear...")
@@ -216,9 +227,9 @@ class MarketplaceScraper:
                     for page in range(scroll_pages):
                         print(f"   Page {page + 1}/{scroll_pages}...")
                         
-                        # Simulate human browsing between pages
-                        if page > 0:
-                            await simulate_human_browsing(session, self.instance_id)
+                        # Simulate human browsing on every page
+                        await simulate_human_browsing(session, self.instance_id)
+                        await _random_mouse_move(session, self.instance_id)
                         
                         # Try JS extraction first (has image support), fall back to query
                         page_listings = await self._extract_listings_js()
@@ -232,10 +243,9 @@ class MarketplaceScraper:
                                 listings.append(listing)
                                 existing_titles.add(listing.title.lower()[:30])
                         
-                        # Scroll down for more
+                        # Scroll down for more with human-like behavior
                         if page < scroll_pages - 1:
-                            await self._scroll_down()
-                            await asyncio.sleep(random.uniform(1.5, 3.0))
+                            await self._humanize_results_browsing()
                     
                     print(f"\n✅ Found {len(listings)} listings")
                     
@@ -363,15 +373,29 @@ class MarketplaceScraper:
                             # Simulate some human fidgeting
                             await simulate_human_browsing(session, self.instance_id)
                         
-                        # Use direct URL with sort parameter (search box doesn't support sorting)
-                        url = self.build_search_url(query, zip_code, radius_miles, sort_by_price=sort_by_price)
-                        await self._navigate(url)
+                        # Search like a human — type into the search box most of the time
+                        searched_via_box = False
+                        if random.random() < 0.75:
+                            await _random_mouse_move(session, self.instance_id)
+                            await human_delay(0.5, 1.5)
+                            searched_via_box = await self._human_search(query)
+                        
+                        if not searched_via_box:
+                            url = self.build_search_url(query, zip_code, radius_miles, sort_by_price=sort_by_price)
+                            await self._navigate(url)
+                        
                         await page_load_delay()
                         
-                        # Scroll to load content
-                        for _ in range(scroll_pages):
+                        # Browse results like a human
+                        await self._humanize_results_browsing()
+                        
+                        # Scroll to load content with human behavior
+                        for p in range(scroll_pages):
+                            await simulate_human_browsing(session, self.instance_id)
                             await self._scroll_down()
                             await scroll_delay()
+                            if p > 0:
+                                await _random_mouse_move(session, self.instance_id)
                         
                         # Wait for listings
                         await self._wait_for_element('a[href*="/marketplace/item/"]', timeout=10000)
@@ -651,6 +675,53 @@ class MarketplaceScraper:
         except:
             # Fallback to JS
             await self._execute_js("window.scrollBy(0, window.innerHeight * 2);")
+    
+    async def _humanize_results_browsing(self):
+        """
+        Simulate a human browsing through search results.
+        Combines scrolling, mouse movements, and pauses like someone
+        scanning listings and deciding what to click.
+        """
+        try:
+            # Initial pause — human looks at results before scrolling
+            await human_delay(1.0, 3.0)
+            
+            # 2-4 rounds of scroll + look + mouse
+            rounds = random.randint(2, 4)
+            for i in range(rounds):
+                # Scroll down a variable amount
+                await self._scroll_down()
+                
+                # Pause to "read" listings — longer pauses sometimes (found something interesting)
+                if random.random() < 0.3:
+                    await human_delay(2.0, 5.0)  # Lingering on something
+                else:
+                    await scroll_delay()
+                
+                # Move mouse around like scanning listings
+                await _random_mouse_move(self.session, self.instance_id)
+                
+                # Occasionally scroll back up a bit (re-checking something)
+                if random.random() < 0.2:
+                    try:
+                        await self.session.call_tool(
+                            "scroll_page",
+                            arguments={
+                                "instance_id": self.instance_id,
+                                "direction": "up",
+                                "amount": random.randint(150, 400),
+                                "smooth": True
+                            }
+                        )
+                        await human_delay(0.5, 1.5)
+                    except:
+                        pass
+                
+                # Small pause between rounds
+                await human_delay(0.3, 1.0)
+            
+        except Exception as e:
+            pass  # Humanization is best-effort, never break the scrape
     
     async def _human_search(self, query: str) -> bool:
         """Use the search box like a human would"""
