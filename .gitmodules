@@ -1,0 +1,3 @@
+[submodule "stealth-browser-mcp"]
+	path = stealth-browser-mcp
+	url = https://github.com/vibheksoni/stealth-browser-mcp.git
