@@ -651,23 +651,31 @@ class MarketplaceScraper:
     
     async def _scroll_down(self):
         """Scroll down to load more content using native smooth scroll"""
+        amount = random.randint(400, 900)
         try:
-            # Use native scroll_page tool for more human-like behavior
-            await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self.session.call_tool(
                     "scroll_page",
                     arguments={
                         "instance_id": self.instance_id,
                         "direction": "down",
-                        "amount": random.randint(600, 1200),  # Random scroll amount
+                        "amount": amount,
                         "smooth": True
                     }
                 ),
                 timeout=5
             )
-        except:
-            # Fallback to JS
-            await self._execute_js("window.scrollBy(0, window.innerHeight * 2);")
+            # Check if the tool call actually succeeded
+            if hasattr(result, 'isError') and result.isError:
+                raise Exception(f"scroll_page failed: {result.content}")
+        except Exception as e:
+            # Fallback to JS smooth scroll
+            print(f"      ⚠️ scroll_page failed ({e}), using JS fallback")
+            await self._execute_js(f"""
+                window.scrollBy({{top: {amount}, behavior: 'smooth'}});
+            """)
+        # Small delay to let smooth scroll complete visually
+        await asyncio.sleep(random.uniform(0.3, 0.8))
     
     async def _humanize_results_browsing(self):
         """
@@ -696,19 +704,23 @@ class MarketplaceScraper:
                 
                 # Occasionally scroll back up a bit (re-checking something)
                 if random.random() < 0.2:
+                    back_amount = random.randint(150, 400)
                     try:
-                        await self.session.call_tool(
-                            "scroll_page",
-                            arguments={
-                                "instance_id": self.instance_id,
-                                "direction": "up",
-                                "amount": random.randint(150, 400),
-                                "smooth": True
-                            }
+                        await asyncio.wait_for(
+                            self.session.call_tool(
+                                "scroll_page",
+                                arguments={
+                                    "instance_id": self.instance_id,
+                                    "direction": "up",
+                                    "amount": back_amount,
+                                    "smooth": True
+                                }
+                            ),
+                            timeout=5
                         )
-                        await human_delay(0.5, 1.5)
                     except:
-                        pass
+                        await self._execute_js(f"window.scrollBy({{top: -{back_amount}, behavior: 'smooth'}});")
+                    await human_delay(0.5, 1.5)
                 
                 # Small pause between rounds
                 await human_delay(0.3, 1.0)
