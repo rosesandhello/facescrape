@@ -649,43 +649,47 @@ class MarketplaceScraper:
         except Exception as e:
             return f"Error: {e}"
     
-    async def _scroll_down(self):
-        """Scroll down to load more content — handles FB's scrollable containers"""
-        amount = random.randint(400, 900)
-        # FB Marketplace often uses a scrollable container div instead of window.
-        # Try the container first, fall back to window.
-        scroll_js = f"""
+    def _build_scroll_js(self, amount: int) -> str:
+        """Build JS to scroll FB's container div (or window as fallback)."""
+        return f"""
             (() => {{
                 const amount = {amount};
-                // FB uses [role="main"] or specific scrollable divs
                 const candidates = [
                     document.querySelector('[role="main"]'),
                     document.querySelector('div[style*="overflow"]'),
-                    document.querySelector('div[class*="x1hc1fzr"]'),  // common FB scroll container
+                    document.querySelector('div[class*="x1hc1fzr"]'),
                     document.scrollingElement,
                     document.documentElement
                 ];
-                
                 for (const el of candidates) {{
                     if (!el) continue;
-                    const before = el.scrollTop;
-                    el.scrollBy({{top: amount, behavior: 'smooth'}});
-                    // If scrollTop changed (or will change due to smooth), use this element
-                    // For smooth scroll, we can't check immediately, so just try the first valid one
                     if (el.scrollHeight > el.clientHeight) {{
-                        return JSON.stringify({{scrolled: true, element: el.tagName || 'unknown', scrollTop: before}});
+                        const before = el.scrollTop;
+                        el.scrollBy({{top: amount, behavior: 'smooth'}});
+                        return JSON.stringify({{element: el.tagName || 'unknown', before, amount}});
                     }}
                 }}
-                
-                // Last resort: window scroll
                 window.scrollBy({{top: amount, behavior: 'smooth'}});
-                return JSON.stringify({{scrolled: true, element: 'window', scrollTop: window.scrollY}});
+                return JSON.stringify({{element: 'window', before: window.scrollY, amount}});
             }})();
         """
-        result = await self._execute_js(scroll_js)
-        print(f"      📜 Scroll: {result[:80] if result else 'no result'}")
-        # Wait for smooth scroll animation
-        await asyncio.sleep(random.uniform(0.5, 1.2))
+
+    async def _scroll_down(self):
+        """Scroll down in human-like spurts with occasional scroll-back."""
+        # 2-4 spurts of scrolling, like a human flicking through listings
+        spurts = random.randint(2, 4)
+        for i in range(spurts):
+            amount = random.randint(250, 600)
+            await self._execute_js(self._build_scroll_js(amount))
+            
+            # Wait for smooth animation + "reading" time
+            await asyncio.sleep(random.uniform(0.6, 2.0))
+            
+            # 10% chance to scroll back up a little (second-guessing, re-reading)
+            if random.random() < 0.10:
+                back = random.randint(100, 300)
+                await self._execute_js(self._build_scroll_js(-back))
+                await asyncio.sleep(random.uniform(0.4, 1.2))
     
     async def _humanize_results_browsing(self):
         """
@@ -715,21 +719,7 @@ class MarketplaceScraper:
                 # Occasionally scroll back up a bit (re-checking something)
                 if random.random() < 0.2:
                     back_amount = random.randint(150, 400)
-                    try:
-                        await asyncio.wait_for(
-                            self.session.call_tool(
-                                "scroll_page",
-                                arguments={
-                                    "instance_id": self.instance_id,
-                                    "direction": "up",
-                                    "amount": back_amount,
-                                    "smooth": True
-                                }
-                            ),
-                            timeout=5
-                        )
-                    except:
-                        await self._execute_js(f"window.scrollBy({{top: -{back_amount}, behavior: 'smooth'}});")
+                    await self._execute_js(self._build_scroll_js(-back_amount))
                     await human_delay(0.5, 1.5)
                 
                 # Small pause between rounds
