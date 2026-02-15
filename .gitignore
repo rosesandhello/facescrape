@@ -45,3 +45,13 @@ Thumbs.db
 # Memory/state files
 memory/
 *.bak
+
+# Stealth browser state
+.scrapedface/
+chrome-profile/
+
+# Build artifacts
+Kooha/
+*.egg-info/
+dist/
+build/

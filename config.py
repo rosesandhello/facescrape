@@ -23,6 +23,7 @@ class Config:
     zip_code: str = "15213"  # Pittsburgh default
     radius_miles: int = 25
     expand_search_terms: bool = True  # Include synonyms and misspellings
+    search_domain: str = ""  # For disambiguation: "computers", "electronics", "vehicles", etc.
     
     # Arbitrage settings
     min_profit_dollars: float = 30.0  # Minimum dollar profit to alert
@@ -142,6 +143,16 @@ def interactive_setup():
     expand_input = input(f"Expand with synonyms/misspellings? (y/n) [{expand_default}]: ").strip().lower()
     if expand_input:
         config.expand_search_terms = expand_input == 'y'
+    
+    # Search domain for disambiguation
+    print("\nSearch domain helps disambiguate overloaded terms (e.g., 'ram' → computer RAM vs Dodge Ram)")
+    print("Options: computers, electronics, gaming, vehicles, (or leave blank for interactive)")
+    domain_default = config.search_domain or "blank"
+    domain_input = input(f"Search domain [{domain_default}]: ").strip().lower()
+    if domain_input and domain_input != "blank":
+        config.search_domain = domain_input
+    elif domain_input == "blank":
+        config.search_domain = ""
     
     config.zip_code = input(f"ZIP code [{config.zip_code}]: ").strip() or config.zip_code
     config.radius_miles = int(input(f"Search radius (miles) [{config.radius_miles}]: ").strip() or config.radius_miles)

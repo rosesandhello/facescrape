@@ -15,10 +15,30 @@ warnings.filterwarnings("ignore", module="pydantic.*")
 
 import asyncio
 import logging
+import io
 
 # Suppress noisy websocket/asyncio cleanup messages
 logging.getLogger("websockets").setLevel(logging.ERROR)
 logging.getLogger("asyncio").setLevel(logging.ERROR)
+
+
+class TeeWriter:
+    """Write to both stdout and a log file"""
+    def __init__(self, log_path: str):
+        self.terminal = sys.__stdout__
+        self.log_file = open(log_path, 'w', encoding='utf-8')
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+    
+    def close(self):
+        self.log_file.close()
 
 def _suppress_exception(loop, context):
     """Suppress Task exception was never retrieved messages"""
@@ -32,16 +52,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure project root is on path for direct script execution
+_project_root = str(Path(__file__).parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from config import Config, interactive_setup
 from scrapers.marketplace_scraper import MarketplaceScraper
 from services.arbitrage import analyze_batch, filter_opportunities, print_analysis_report
 from services.discord_notifier import send_discord_alert, send_scan_summary, send_error_alert
-from search_terms import get_all_search_variations
+from search_terms import get_all_search_variations, clarify_search_terms
 from reports import ScanReport, ScanItem, ReportGenerator, save_scan_to_db
-# TitleIdentifier replaced by SearchTermGenerator in price_lookup.py
 import database as db
 
 
@@ -69,7 +90,27 @@ class ArbitrageScanner:
         # Get search terms (with optional expansion)
         base_terms = self.config.categories if self.config.categories else [self.config.category]
         expand = getattr(self.config, 'expand_search_terms', False)
-        search_terms = get_all_search_variations(base_terms, expand=expand)
+        
+        # Evaluate each search term - LLM checks if eBay results would be muddied
+        # If muddied, asks user to clarify their intent and provides optimized terms
+        print("\n📋 Evaluating search terms for eBay clarity...")
+        clarified_terms = await clarify_search_terms(base_terms)
+        
+        if not clarified_terms:
+            print("\n❌ No search terms after clarification!")
+            print("   All terms were skipped. Please try different terms.")
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "categories": base_terms,
+                "search_terms": [],
+                "total_listings": 0,
+                "analyzed": 0,
+                "opportunities": 0,
+                "alerts_sent": 0,
+                "errors": ["All search terms were skipped during clarification"]
+            }
+        
+        search_terms = get_all_search_variations(clarified_terms, expand=expand)
         
         # Always include a search for free items
         if "free" not in [t.lower() for t in search_terms]:
@@ -318,7 +359,7 @@ class ArbitrageScanner:
             report_gen.print_report(report)
             
             # Save report files
-            saved_files = report_gen.save_report(report, formats=["txt", "md", "json"])
+            saved_files = report_gen.save_report(report, formats=["txt", "md", "json", "html"])
             print(f"\n📁 Report saved:")
             for fmt, path in saved_files.items():
                 print(f"   {fmt}: {path}")
@@ -458,6 +499,17 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Set up logging to file
+    log_dir = Path(__file__).parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    
+    tee = TeeWriter(str(log_path))
+    sys.stdout = tee
+    sys.stderr = tee
+    
+    print(f"📝 Logging to: {log_path}")
+    
     # Set up event loop with suppressed websocket cleanup noise
     loop = asyncio.new_event_loop()
     loop.set_exception_handler(_suppress_exception)
@@ -466,3 +518,8 @@ if __name__ == "__main__":
         loop.run_until_complete(main())
     finally:
         loop.close()
+        # Restore stdout and close log
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        tee.close()
+        print(f"\n📝 Log saved to: {log_path}")

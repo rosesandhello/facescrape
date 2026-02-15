@@ -104,6 +104,8 @@ def init_db():
             title_similarity REAL,
             image_match BOOLEAN,
             image_confidence REAL,
+            fb_synthesis TEXT,
+            ebay_synthesis TEXT,
             reasoning TEXT,
             matched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (fb_listing_id) REFERENCES fb_listings(id),
@@ -279,7 +281,9 @@ def insert_ai_match(
     title_similarity: float = None,
     image_match: bool = None,
     image_confidence: float = None,
-    reasoning: str = None
+    reasoning: str = None,
+    fb_synthesis: str = None,
+    ebay_synthesis: str = None
 ) -> int:
     """Insert AI match result"""
     conn = get_connection()
@@ -288,11 +292,11 @@ def insert_ai_match(
     cursor.execute("""
         INSERT INTO ai_matches
         (fb_listing_id, ebay_listing_id, is_match, confidence,
-         title_similarity, image_match, image_confidence, reasoning)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         title_similarity, image_match, image_confidence, fb_synthesis, ebay_synthesis, reasoning)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         fb_listing_id, ebay_listing_id, is_match, confidence,
-        title_similarity, image_match, image_confidence, reasoning
+        title_similarity, image_match, image_confidence, fb_synthesis, ebay_synthesis, reasoning
     ))
     
     match_id = cursor.lastrowid

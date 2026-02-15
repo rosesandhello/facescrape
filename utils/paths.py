@@ -16,18 +16,24 @@ def find_stealth_browser() -> str:
     """
     Find stealth-browser-mcp installation.
     
-    Checks common locations:
-    1. ~/stealth-browser-mcp/src/server.py
-    2. Sibling directory ../stealth-browser-mcp/src/server.py
-    3. /home/bosh/stealth-browser-mcp/src/server.py (legacy)
+    Resolution order:
+    1. STEALTH_BROWSER_PATH env var (if set)
+    2. ~/stealth-browser-mcp/src/server.py
+    3. Sibling directory ../stealth-browser-mcp/src/server.py
+    4. ./stealth-browser-mcp/src/server.py (inside project)
     
     Returns path or empty string if not found.
     """
     candidates = [
         Path.home() / "stealth-browser-mcp" / "src" / "server.py",
         get_project_root().parent / "stealth-browser-mcp" / "src" / "server.py",
-        Path("/home/bosh/stealth-browser-mcp/src/server.py"),
+        get_project_root() / "stealth-browser-mcp" / "src" / "server.py",
     ]
+    
+    # Also check STEALTH_BROWSER_PATH env var
+    env_path = os.environ.get("STEALTH_BROWSER_PATH")
+    if env_path:
+        candidates.insert(0, Path(env_path))
     
     for path in candidates:
         if path.exists():

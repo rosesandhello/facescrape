@@ -234,38 +234,41 @@ Example bad responses (too vague):
         
         Returns: (is_specific: bool, reasoning: str)
         """
-        prompt = f"""Is this search term SPECIFIC ENOUGH for eBay price comparison?
+        prompt = f"""Can this search term find the RIGHT PRODUCT on eBay?
 
 TERM: "{term}"
 {f'CONTEXT: {context}' if context else ''}
 
-SPECIFIC = has a recognizable BRAND/MANUFACTURER or PRODUCT LINE NAME
-(something a company trademarked or produced, not just a category)
+GOOD = searching this on eBay will return THE SAME TYPE OF PRODUCT.
+BAD = searching returns random unrelated stuff.
 
-✅ SPECIFIC (has brand/product line):
-- "American Silver Eagle 2024" (US Mint product line)
-- "Nintendo Switch OLED" (Nintendo product)
-- "iPhone 13 Pro" (Apple product)
-- "EVGA RTX 3080" (brand + model)
-- "Morgan Dollar 1921" (historic US coin series)
-- "Herman Miller Aeron Chair" (brand + product)
-- "KitchenAid Stand Mixer" (brand + product type)
+RULES - these are ALWAYS specific enough:
+1. Movie/game/book title + format → "Hostel DVD", "Skyrim Xbox" ✓
+2. Brand + product → "Mini GT diecast", "KitchenAid mixer" ✓
+3. Hardware with specs → "M2x5mm screw", "18650 battery" ✓
+4. Model numbers → "RTX 3080", "iPhone 13" ✓
+5. Collectible + identifier → "Pokemon Charizard", "Hot Wheels Camaro" ✓
 
-❌ NOT SPECIFIC (just categories, no brand):
-- "gaming storage tower" (what brand? just furniture)
-- "silver coin" (which one?)
-- "gaming console" (which brand?)
-- "graphics card" (no brand/model)
-- "laptop" (no brand)
-- "vintage jewelry" (no brand/maker)
-- "office chair" (no brand)
-- "kitchen appliance" (no brand)
+IMPORTANT: If it looks like a brand name (capitalized words like "Mini GT", "Hot Wheels", "Funko Pop"), TRUST that it's a brand even if you don't recognize it. eBay sellers know their brands.
 
-KEY TEST: Would searching this on eBay return items from ONE specific manufacturer/product line, or a mix of different brands?
+IMPORTANT: For hardware/parts, the SPECIFICATION is the identifier. "M2x5mm screw Honda key fob" is specific because M2x5mm IS a specific size. Multiple manufacturers making the same spec is fine - they're interchangeable.
 
-Answer ONLY:
-YES or NO
-REASON: [brief explanation]"""
+GOOD TERMS:
+- "Mini GT diecast cars" → Mini GT is a brand ✓
+- "M2x5mm Honda key fob screw" → specific size + application ✓
+- "Hostel Unrated DVD" → movie + format ✓
+- "RTX 3080" → specific GPU ✓
+- "18650 battery" → specific battery size ✓
+- "Hot Wheels 67 Camaro" → brand + model ✓
+
+BAD TERMS (actually vague):
+- "diecast cars" → which brand/model?
+- "screw" → what size?
+- "DVD" → which movie?
+- "battery" → what type?
+- "toy car" → too generic
+
+Answer only: YES or NO"""
 
         response = await self._call_ollama(self.text_model, prompt)
         

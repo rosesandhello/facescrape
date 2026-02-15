@@ -332,6 +332,346 @@ class ReportGenerator:
         
         return "\n".join(lines)
     
+    def generate_html(self, report: ScanReport) -> str:
+        """Generate a self-contained static HTML report"""
+        import html as html_lib
+        
+        def esc(text):
+            return html_lib.escape(str(text)) if text else ""
+        
+        status_colors = {
+            "opportunity": "#22c55e",  # green
+            "matched": "#3b82f6",      # blue
+            "defective": "#f59e0b",    # amber
+            "vague": "#a855f7",        # purple
+            "no_match": "#6b7280",     # gray
+            "scanned": "#6b7280"       # gray
+        }
+        
+        status_labels = {
+            "opportunity": "💰 Opportunity",
+            "matched": "✅ Matched",
+            "defective": "⚠️ Defective",
+            "vague": "🔸 Vague",
+            "no_match": "❌ No Match",
+            "scanned": "📦 Scanned"
+        }
+        
+        # Build item cards HTML
+        items_html = []
+        for i, item in enumerate(report.items, 1):
+            status_color = status_colors.get(item.status, "#6b7280")
+            status_label = status_labels.get(item.status, item.status)
+            
+            profit_html = ""
+            if item.profit_dollars > 0:
+                profit_class = "profit-high" if item.profit_percent >= 50 else "profit-med" if item.profit_percent >= 20 else "profit-low"
+                profit_html = f'<div class="profit {profit_class}">💵 ${item.profit_dollars:.2f} ({item.profit_percent:.0f}%)</div>'
+            
+            image_html = ""
+            if item.image_url:
+                image_html = f'<img src="{esc(item.image_url)}" alt="{esc(item.title[:30])}" loading="lazy" onerror="this.style.display=\'none\'">'
+            
+            identified_html = ""
+            if item.identified_title and item.identified_title != item.title:
+                identified_html = f'<div class="identified">🏷️ {esc(item.identified_title)}</div>'
+            
+            defect_html = ""
+            if item.is_defective:
+                defect_html = f'<div class="defect-reason">⚠️ {esc(item.defect_reason)}</div>'
+            if item.is_vague:
+                defect_html = f'<div class="defect-reason">🔸 {esc(item.vague_reason)}</div>'
+            
+            link_html = ""
+            if item.listing_url:
+                link_html = f'<a href="{esc(item.listing_url)}" target="_blank" class="view-link">View on FB →</a>'
+            
+            items_html.append(f'''
+            <div class="item-card" data-status="{item.status}" data-profit="{item.profit_dollars}">
+                <div class="item-header">
+                    <span class="item-num">#{i}</span>
+                    <span class="status-badge" style="background: {status_color}">{status_label}</span>
+                </div>
+                {image_html}
+                <div class="item-content">
+                    <h3>{esc(item.title[:80])}</h3>
+                    {identified_html}
+                    <div class="prices">
+                        <div class="price fb-price">FB: ${item.fb_price:.2f}</div>
+                        <div class="price ebay-price">eBay: {f"${item.ebay_price:.2f}" if item.ebay_price > 0 else "—"}</div>
+                    </div>
+                    {profit_html}
+                    {defect_html}
+                    {link_html}
+                </div>
+            </div>
+            ''')
+        
+        html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arbitrage Scan - {report.timestamp.strftime("%Y-%m-%d %H:%M")}</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            line-height: 1.5;
+            padding: 20px;
+        }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        
+        /* Header */
+        header {{
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px;
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            border-radius: 16px;
+            border: 1px solid #475569;
+        }}
+        h1 {{ font-size: 2rem; margin-bottom: 8px; }}
+        .subtitle {{ color: #94a3b8; font-size: 0.9rem; }}
+        
+        /* Stats Grid */
+        .stats {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-bottom: 30px;
+        }}
+        .stat-card {{
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            border: 1px solid #334155;
+        }}
+        .stat-value {{
+            font-size: 2rem;
+            font-weight: bold;
+            color: #22c55e;
+        }}
+        .stat-value.blue {{ color: #3b82f6; }}
+        .stat-value.amber {{ color: #f59e0b; }}
+        .stat-value.purple {{ color: #a855f7; }}
+        .stat-label {{ color: #94a3b8; font-size: 0.85rem; margin-top: 4px; }}
+        
+        /* Filters */
+        .filters {{
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }}
+        .filter-btn {{
+            padding: 8px 16px;
+            border: 1px solid #475569;
+            background: #1e293b;
+            color: #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }}
+        .filter-btn:hover {{ background: #334155; }}
+        .filter-btn.active {{ background: #3b82f6; border-color: #3b82f6; }}
+        
+        /* Items Grid */
+        .items-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }}
+        .item-card {{
+            background: #1e293b;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #334155;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }}
+        .item-card:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }}
+        .item-card.hidden {{ display: none; }}
+        .item-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: #0f172a;
+        }}
+        .item-num {{ color: #64748b; font-size: 0.85rem; }}
+        .status-badge {{
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }}
+        .item-card img {{
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            background: #334155;
+        }}
+        .item-content {{ padding: 16px; }}
+        .item-content h3 {{
+            font-size: 1rem;
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }}
+        .identified {{
+            color: #a855f7;
+            font-size: 0.85rem;
+            margin-bottom: 12px;
+        }}
+        .prices {{
+            display: flex;
+            gap: 16px;
+            margin-bottom: 12px;
+        }}
+        .price {{
+            font-size: 1.1rem;
+            font-weight: 600;
+        }}
+        .fb-price {{ color: #3b82f6; }}
+        .ebay-price {{ color: #22c55e; }}
+        .profit {{
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }}
+        .profit-high {{ background: rgba(34, 197, 94, 0.2); color: #22c55e; }}
+        .profit-med {{ background: rgba(59, 130, 246, 0.2); color: #3b82f6; }}
+        .profit-low {{ background: rgba(148, 163, 184, 0.2); color: #94a3b8; }}
+        .defect-reason {{
+            color: #f59e0b;
+            font-size: 0.85rem;
+            margin-bottom: 12px;
+        }}
+        .view-link {{
+            display: inline-block;
+            color: #3b82f6;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }}
+        .view-link:hover {{ text-decoration: underline; }}
+        
+        /* Sort dropdown */
+        select {{
+            padding: 8px 16px;
+            border: 1px solid #475569;
+            background: #1e293b;
+            color: #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Arbitrage Scan Report</h1>
+            <div class="subtitle">
+                {report.timestamp.strftime("%B %d, %Y at %I:%M %p")} · 
+                {", ".join(report.search_terms)} · 
+                {report.location}, {report.radius_miles} mi
+            </div>
+        </header>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value">{report.total_fb_listings}</div>
+                <div class="stat-label">FB Listings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value blue">{report.ai_identified}</div>
+                <div class="stat-label">AI Identified</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{report.opportunities_found}</div>
+                <div class="stat-label">Opportunities</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${report.total_potential_profit:.2f}</div>
+                <div class="stat-label">Total Profit</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value amber">{report.defective_skipped}</div>
+                <div class="stat-label">Defective</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value purple">{report.vague_skipped}</div>
+                <div class="stat-label">Vague</div>
+            </div>
+        </div>
+        
+        <div class="filters">
+            <button class="filter-btn active" data-filter="all">All ({len(report.items)})</button>
+            <button class="filter-btn" data-filter="opportunity">💰 Opportunities ({report.opportunities_found})</button>
+            <button class="filter-btn" data-filter="matched">✅ Matched ({report.ebay_matched - report.opportunities_found})</button>
+            <button class="filter-btn" data-filter="no_match">❌ No Match ({report.no_match})</button>
+            <button class="filter-btn" data-filter="defective">⚠️ Defective ({report.defective_skipped})</button>
+            <select id="sort-select">
+                <option value="default">Sort: Default</option>
+                <option value="profit-desc">Profit: High → Low</option>
+                <option value="profit-asc">Profit: Low → High</option>
+                <option value="price-asc">FB Price: Low → High</option>
+                <option value="price-desc">FB Price: High → Low</option>
+            </select>
+        </div>
+        
+        <div class="items-grid" id="items-grid">
+            {"".join(items_html)}
+        </div>
+    </div>
+    
+    <script>
+        // Filter functionality
+        document.querySelectorAll('.filter-btn').forEach(btn => {{
+            btn.addEventListener('click', () => {{
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                
+                const filter = btn.dataset.filter;
+                document.querySelectorAll('.item-card').forEach(card => {{
+                    if (filter === 'all' || card.dataset.status === filter) {{
+                        card.classList.remove('hidden');
+                    }} else {{
+                        card.classList.add('hidden');
+                    }}
+                }});
+            }});
+        }});
+        
+        // Sort functionality
+        document.getElementById('sort-select').addEventListener('change', (e) => {{
+            const grid = document.getElementById('items-grid');
+            const cards = Array.from(grid.querySelectorAll('.item-card'));
+            
+            cards.sort((a, b) => {{
+                const profitA = parseFloat(a.dataset.profit) || 0;
+                const profitB = parseFloat(b.dataset.profit) || 0;
+                
+                switch(e.target.value) {{
+                    case 'profit-desc': return profitB - profitA;
+                    case 'profit-asc': return profitA - profitB;
+                    default: return 0;
+                }}
+            }});
+            
+            cards.forEach(card => grid.appendChild(card));
+        }});
+    </script>
+</body>
+</html>'''
+        
+        return html
+    
     def save_report(self, report: ScanReport, formats: list[str] = ["txt", "md"]) -> dict[str, Path]:
         """Save report to files"""
         timestamp = report.timestamp.strftime("%Y%m%d_%H%M%S")
@@ -346,6 +686,11 @@ class ReportGenerator:
             md_path = self.output_dir / f"scan_{timestamp}.md"
             md_path.write_text(self.generate_markdown(report))
             saved["md"] = md_path
+        
+        if "html" in formats:
+            html_path = self.output_dir / f"scan_{timestamp}.html"
+            html_path.write_text(self.generate_html(report))
+            saved["html"] = html_path
         
         if "json" in formats:
             json_path = self.output_dir / f"scan_{timestamp}.json"
@@ -479,7 +824,7 @@ if __name__ == "__main__":
     gen.print_report(report)
     
     # Save
-    saved = gen.save_report(report, formats=["txt", "md", "json"])
+    saved = gen.save_report(report, formats=["txt", "md", "json", "html"])
     print(f"\n📁 Saved reports:")
     for fmt, path in saved.items():
         print(f"   {fmt}: {path}")

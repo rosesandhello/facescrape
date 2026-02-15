@@ -21,7 +21,12 @@ from mcp.client.stdio import stdio_client
 import sys
 sys.path.append('..')
 from utils.listing_parser import Listing, extract_listings_from_html, parse_price
-from utils.stealth_helpers import human_delay, typing_delay, page_load_delay, scroll_delay, get_stealth_spawn_options
+from utils.stealth_helpers import (
+    human_delay, typing_delay, page_load_delay, scroll_delay, between_search_delay,
+    get_stealth_spawn_options, get_random_typing_delay_ms, type_like_human,
+    warm_profile, save_cookies, simulate_human_browsing, ensure_profile_dir,
+    DEFAULT_PROFILE_DIR
+)
 
 
 class MarketplaceScraper:
@@ -30,7 +35,7 @@ class MarketplaceScraper:
     def __init__(
         self,
         stealth_browser_path: str = None,
-        user_data_dir: str = "/tmp/scrapedface-fb-profile",
+        user_data_dir: str = None,
         headless: bool = False
     ):
         # Auto-detect stealth browser if not provided
@@ -38,7 +43,8 @@ class MarketplaceScraper:
             from utils.paths import find_stealth_browser
             stealth_browser_path = find_stealth_browser()
         self.stealth_browser_path = stealth_browser_path
-        self.user_data_dir = user_data_dir
+        # Use persistent profile by default (survives across runs)
+        self.user_data_dir = ensure_profile_dir(user_data_dir or DEFAULT_PROFILE_DIR)
         self.headless = headless
         self.session = None
         self.instance_id = None
@@ -141,6 +147,9 @@ class MarketplaceScraper:
                     # Set up stealth hooks
                     await self._setup_stealth_hooks()
                     
+                    # Warm profile (builds browsing history, skips if recent)
+                    await warm_profile(session, self.instance_id)
+                    
                     print(f"🔍 Searching: {query}")
                     print(f"📍 Location: {zip_code or 'default'}, {radius_miles} miles")
                     
@@ -166,7 +175,7 @@ class MarketplaceScraper:
                             still_login = await self._check_login_state()
                             if not still_login:
                                 print("\n✅ Login successful! Continuing...")
-                                await asyncio.sleep(2)  # Brief pause after login
+                                await asyncio.sleep(random.uniform(1.5, 3.0))  # Brief pause after login
                                 # Re-navigate to marketplace after login
                                 await self._navigate(mp_url)
                                 await page_load_delay()
@@ -207,10 +216,14 @@ class MarketplaceScraper:
                     for page in range(scroll_pages):
                         print(f"   Page {page + 1}/{scroll_pages}...")
                         
-                        # Try query_elements first, then fall back to JS
-                        page_listings = await self._extract_listings_query()
+                        # Simulate human browsing between pages
+                        if page > 0:
+                            await simulate_human_browsing(session, self.instance_id)
+                        
+                        # Try JS extraction first (has image support), fall back to query
+                        page_listings = await self._extract_listings_js()
                         if not page_listings:
-                            page_listings = await self._extract_listings_js()
+                            page_listings = await self._extract_listings_query()
                         
                         # Dedupe and add
                         existing_titles = {l.title.lower()[:30] for l in listings}
@@ -222,7 +235,7 @@ class MarketplaceScraper:
                         # Scroll down for more
                         if page < scroll_pages - 1:
                             await self._scroll_down()
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(random.uniform(1.5, 3.0))
                     
                     print(f"\n✅ Found {len(listings)} listings")
                     
@@ -232,6 +245,9 @@ class MarketplaceScraper:
                         await self._take_screenshot("/tmp/fb-debug.png")
                         print("   Saved to /tmp/fb-debug.png")
                         print("\n💡 No listings found. Check the screenshot to see what's on screen.")
+                    
+                    # Save cookies/session before closing
+                    await save_cookies(session, self.instance_id)
                     
                     # Cleanup
                     try:
@@ -298,6 +314,9 @@ class MarketplaceScraper:
                     # Set up stealth hooks
                     await self._setup_stealth_hooks()
                     
+                    # Warm profile
+                    await warm_profile(session, self.instance_id)
+                    
                     # Navigate to marketplace first
                     mp_url = f"https://www.facebook.com/marketplace/{zip_code}" if zip_code else "https://www.facebook.com/marketplace/"
                     print(f"📍 Loading marketplace: {mp_url}")
@@ -336,11 +355,13 @@ class MarketplaceScraper:
                         print(f"🔍 [{i+1}/{len(queries)}] Searching: {query}")
                         print(f"{'='*50}")
                         
-                        # Random delay between searches (more human-like)
+                        # Random delay between searches (human-like variance)
                         if i > 0:
-                            delay = random.uniform(3, 7)
-                            print(f"   ⏳ Waiting {delay:.1f}s before next search...")
+                            delay = between_search_delay()
+                            print(f"   ⏳ Waiting {delay:.0f}s before next search...")
                             await asyncio.sleep(delay)
+                            # Simulate some human fidgeting
+                            await simulate_human_browsing(session, self.instance_id)
                         
                         # Use direct URL with sort parameter (search box doesn't support sorting)
                         url = self.build_search_url(query, zip_code, radius_miles, sort_by_price=sort_by_price)
@@ -355,10 +376,10 @@ class MarketplaceScraper:
                         # Wait for listings
                         await self._wait_for_element('a[href*="/marketplace/item/"]', timeout=10000)
                         
-                        # Extract listings
-                        query_listings = await self._extract_listings_query()
+                        # Extract listings (JS first for image support)
+                        query_listings = await self._extract_listings_js()
                         if not query_listings:
-                            query_listings = await self._extract_listings_js()
+                            query_listings = await self._extract_listings_query()
                         
                         # Also try network extraction
                         network_listings = await self._extract_from_network()
@@ -380,6 +401,9 @@ class MarketplaceScraper:
                         if i < len(queries) - 1:
                             await self._navigate(mp_url)
                             await human_delay(1, 2)
+                    
+                    # Save cookies before closing
+                    await save_cookies(session, self.instance_id)
                     
                     # Cleanup
                     print(f"\n🏁 Scraping complete: {len(all_listings)} total listings")
@@ -575,7 +599,7 @@ class MarketplaceScraper:
             except Exception as e:
                 if i == 0:
                     print(f"      Parse error: {e}")
-            await asyncio.sleep(1)
+            await asyncio.sleep(random.uniform(0.8, 1.3))
         
         print(f"   ⚠️ Timeout waiting for listings")
     
@@ -665,31 +689,49 @@ class MarketplaceScraper:
                 print("      ✗ Could not find search input")
                 return False
             
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(random.uniform(0.3, 0.7))
             
-            # Type the search query
+            # Type the search query with human-like randomized timing
+            typed = False
             for selector in search_selectors:
                 try:
-                    result = await asyncio.wait_for(
-                        self.session.call_tool(
-                            "type_text",
-                            arguments={
-                                "instance_id": self.instance_id,
-                                "selector": selector,
-                                "text": query,
-                                "clear_first": True,
-                                "delay_ms": 80  # Human-like typing speed
-                            }
-                        ),
-                        timeout=10
+                    # Use human-like typing with randomized delays
+                    success = await type_like_human(
+                        self.session,
+                        self.instance_id,
+                        selector,
+                        query,
+                        clear_first=True
                     )
-                    if result and not (hasattr(result, 'isError') and result.isError):
+                    if success:
                         print(f"      ✓ Typed query: {query}")
+                        typed = True
                         break
-                except:
-                    continue
+                except Exception as e:
+                    # Fallback to regular type_text with variable delay
+                    try:
+                        delay = get_random_typing_delay_ms()
+                        result = await asyncio.wait_for(
+                            self.session.call_tool(
+                                "type_text",
+                                arguments={
+                                    "instance_id": self.instance_id,
+                                    "selector": selector,
+                                    "text": query,
+                                    "clear_first": True,
+                                    "delay_ms": delay
+                                }
+                            ),
+                            timeout=10
+                        )
+                        if result and not (hasattr(result, 'isError') and result.isError):
+                            print(f"      ✓ Typed query: {query}")
+                            typed = True
+                            break
+                    except:
+                        continue
             
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(random.uniform(0.2, 0.5))
             
             # Press Enter to search
             await self._execute_js("""
@@ -707,7 +749,7 @@ class MarketplaceScraper:
             """)
             
             print("      ✓ Submitted search")
-            await asyncio.sleep(3)  # Wait for search results to load
+            await asyncio.sleep(random.uniform(2.5, 4.5))  # Wait for search results to load
             
             return True
             
@@ -946,12 +988,22 @@ class MarketplaceScraper:
                                 break
                     
                     if title and price > 0:
+                        # Try to get image from element's container
+                        img_url = ''
+                        # query_elements might include image info
+                        if 'image' in el:
+                            img_url = el.get('image', '')
+                        elif 'img' in str(el):
+                            # Try to extract from element data
+                            pass
+                        
                         listings.append(Listing(
                             title=title[:200],
                             price=price,
                             price_raw=price_match.group(),
                             location='',
-                            listing_url=href if href.startswith('http') else f"https://www.facebook.com{href}"
+                            listing_url=href if href.startswith('http') else f"https://www.facebook.com{href}",
+                            image_url=img_url
                         ))
                 except:
                     continue
@@ -1050,12 +1102,30 @@ class MarketplaceScraper:
                     const locMatch = allText.match(/(\\d+\\s*miles?\\s*away|Listed\\s+[^\\n]+)/i);
                     if (locMatch) location = locMatch[0];
                     
+                    // Find image - FB uses img tags or background-image styles
+                    let imageUrl = '';
+                    const img = card.querySelector('img[src*="fbcdn"]') || 
+                                card.querySelector('img[src*="fb"]') ||
+                                card.querySelector('img');
+                    if (img && img.src && !img.src.includes('data:')) {
+                        imageUrl = img.src;
+                    }
+                    // Also check for background-image style
+                    if (!imageUrl) {
+                        const bgEl = card.querySelector('[style*="background-image"]');
+                        if (bgEl) {
+                            const bgMatch = bgEl.style.backgroundImage.match(/url\\(['"]?([^'"\\)]+)/);
+                            if (bgMatch) imageUrl = bgMatch[1];
+                        }
+                    }
+                    
                     listings.push({
                         title: title,
                         price: priceNum,
                         price_raw: price,
                         location: location,
-                        url: url
+                        url: url,
+                        image: imageUrl
                     });
                 } catch(e) {}
             });
@@ -1107,7 +1177,8 @@ class MarketplaceScraper:
                         price=item.get('price', 0),
                         price_raw=item.get('price_raw', ''),
                         location=item.get('location', ''),
-                        listing_url=item.get('url', '')
+                        listing_url=item.get('url', ''),
+                        image_url=item.get('image', '')
                     ))
             else:
                 print(f"   ⚠️ No JSON found in result: {result_str[:200]}")
@@ -1141,7 +1212,6 @@ class MarketplaceScraper:
 async def main():
     """Test the scraper"""
     scraper = MarketplaceScraper(
-        stealth_browser_path="/home/bosh/stealth-browser-mcp/src/server.py",
         headless=False
     )
     

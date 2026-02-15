@@ -1,21 +1,20 @@
-# FB Marketplace Arbitrage Scanner
-# Install with: pip install -r requirements.txt
+# ScrapedFace - FB Marketplace Arbitrage Scanner
+# Install: pip install -r requirements.txt
 
-# MCP Client (for stealth browser)
+# Core
 mcp>=1.0.0
-
-# HTTP client
 httpx>=0.25.0
-
-# Also need stealth-browser-mcp dependencies:
-# pip install -r /home/bosh/stealth-browser-mcp/requirements.txt
-#
-# Or install these directly:
-psutil>=5.9.0
-playwright>=1.40.0
+pydantic>=2.0.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+
+# AI matching (optional, for image-based verification)
 pillow>=10.0.0
+
+# Stealth browser (requires stealth-browser-mcp installed separately)
+# See: https://github.com/nicholasgasior/stealth-browser-mcp
+# Set STEALTH_BROWSER_PATH env var or place it at ~/stealth-browser-mcp/
+psutil>=5.9.0
+playwright>=1.40.0
 fastmcp>=2.0.0
 nodriver>=0.30.0
-pydantic>=2.0.0

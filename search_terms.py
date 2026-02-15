@@ -1,10 +1,19 @@
 """
 Search term expansion with synonyms and common misspellings.
 Supports both built-in expansions and user-defined custom terms.
+Includes disambiguation check for overloaded terms.
 """
 import json
 import re
 from pathlib import Path
+from typing import Optional
+import asyncio
+
+try:
+    import httpx
+    HAS_HTTPX = True
+except ImportError:
+    HAS_HTTPX = False
 
 # File for user-defined custom expansions
 CUSTOM_TERMS_FILE = Path(__file__).parent / "custom_terms.json"
@@ -276,6 +285,253 @@ def interactive_term_manager():
         
         elif choice == "5":
             break
+
+
+# ============================================================================
+# SEARCH TERM EVALUATION - LLM evaluates each term for eBay search quality
+# ============================================================================
+
+# Known ambiguous terms - bypass LLM check, always prompt for clarification
+# These are terms where the LLM might be inconsistent
+ALWAYS_AMBIGUOUS = {
+    "ram": {
+        "computer memory": ["DDR4 RAM", "DDR5 RAM", "desktop RAM", "laptop RAM"],
+        "truck parts": ["Dodge Ram parts", "Ram 1500", "Ram 2500", "Ram truck"]
+    },
+    "charger": {
+        "electronics": ["phone charger", "USB charger", "laptop charger", "battery charger"],
+        "vehicle": ["Dodge Charger parts", "Charger RT", "Charger Hellcat"]
+    },
+    "switch": {
+        "gaming": ["Nintendo Switch", "Switch OLED", "Switch Lite", "Switch games"],
+        "networking": ["network switch", "ethernet switch", "Cisco switch"],
+        "electrical": ["light switch", "wall switch", "dimmer switch"]
+    },
+    "pilot": {
+        "vehicle": ["Honda Pilot", "Pilot SUV", "Honda Pilot parts"],
+        "pens": ["Pilot pen", "G2 Pilot", "Pilot G2"],
+        "aviation": ["pilot headset", "pilot supplies"]
+    },
+    "element": {
+        "vehicle": ["Honda Element", "Element SUV", "Honda Element parts"],
+        "speakers": ["Element speakers", "Element audio"],
+    },
+    "explorer": {
+        "vehicle": ["Ford Explorer", "Explorer SUV", "Explorer parts"],
+        "software": ["Internet Explorer", "File Explorer"]
+    },
+    "titan": {
+        "graphics": ["NVIDIA Titan", "Titan RTX", "GTX Titan"],
+        "vehicle": ["Nissan Titan", "Titan truck"]
+    },
+}
+
+
+async def evaluate_search_term(
+    term: str,
+    ollama_url: str = "http://localhost:11434",
+    model: str = "qwen2.5"
+) -> dict:
+    """
+    Evaluate a search term for eBay search quality.
+    
+    The LLM thinks about what eBay would return for this term and determines
+    if the results would be muddied/mixed across unrelated product categories.
+    
+    Returns dict with:
+        - needs_clarification: bool
+        - interpretations: list of possible meanings with their eBay search terms
+        - reasoning: str explanation
+    """
+    # Check hardcoded always-ambiguous list first (bypass LLM for consistency)
+    term_lower = term.lower().strip()
+    if term_lower in ALWAYS_AMBIGUOUS:
+        meanings = ALWAYS_AMBIGUOUS[term_lower]
+        interpretations = [
+            {"meaning": meaning, "search_terms": terms}
+            for meaning, terms in meanings.items()
+        ]
+        return {
+            "needs_clarification": True,
+            "interpretations": interpretations,
+            "reasoning": f"'{term}' is a known ambiguous term with multiple meanings"
+        }
+    
+    if not HAS_HTTPX:
+        return {"needs_clarification": False, "reasoning": "httpx not available", "interpretations": []}
+    
+    prompt = f"""You are an eBay search expert. Your job is to determine if a search term would return MIXED, UNRELATED product categories.
+
+Search term: "{term}"
+
+IMPORTANT: Be VERY conservative about flagging terms as muddied. Most terms are NOT muddied.
+
+A term is ONLY muddied if searching it on eBay LITERALLY returns completely different product types on the first page.
+
+ACTUALLY MUDDIED (these literally return mixed categories):
+- "ram" → computer RAM sticks AND Dodge Ram truck parts (the word "ram" is used by both)
+- "charger" → phone chargers AND Dodge Charger car parts  
+- "switch" → Nintendo Switch AND network switches AND light switches
+- "pilot" → Honda Pilot parts AND G2 Pilot pens AND pilot supplies
+- "element" → Honda Element parts AND Element speakers
+
+NOT MUDDIED (these return ONE clear category):
+- "gpu" → ONLY graphics cards (no cars, no trucks, no other categories)
+- "nvidia" → ONLY NVIDIA products (graphics cards, Shield, etc.)
+- "intel" → ONLY Intel products (CPUs, NUCs, etc.)
+- "amd" → ONLY AMD products
+- "ddr4" / "ddr5" → ONLY computer memory
+- "rtx 3080" → ONLY that specific GPU
+- "iphone" → ONLY Apple phones
+- "macbook" → ONLY Apple laptops
+- "playstation" → ONLY PlayStation products
+- "xbox" → ONLY Xbox products
+
+The key test: Does the WORD itself have multiple meanings in commerce?
+- "ram" = YES (memory AND truck brand)
+- "gpu" = NO (only means graphics processing unit)
+- "nvidia" = NO (only means the company NVIDIA)
+
+If the term is NOT muddied, respond:
+MUDDIED: no
+REASONING: [one sentence]
+
+If the term IS muddied, respond:
+MUDDIED: yes
+INTERPRETATIONS:
+- meaning1: search term 1, search term 2
+- meaning2: search term 1, search term 2
+REASONING: [one sentence about the actual ambiguity]"""
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            response = await client.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False
+                }
+            )
+            
+            if response.status_code != 200:
+                return {"needs_clarification": False, "reasoning": f"LLM error: {response.status_code}", "interpretations": []}
+            
+            result = response.json().get('response', '')
+            
+            # Parse the response
+            result_lower = result.lower()
+            needs_clarification = (
+                "muddied: yes" in result_lower or 
+                "muddied:yes" in result_lower
+            )
+            
+            # Extract interpretations
+            interpretations = []
+            reasoning = ""
+            in_interpretations = False
+            
+            for line in result.split('\n'):
+                line = line.strip()
+                if line.lower().startswith('interpretations:'):
+                    in_interpretations = True
+                    continue
+                elif line.lower().startswith('reasoning:'):
+                    in_interpretations = False
+                    reasoning = line.split(':', 1)[1].strip()
+                elif in_interpretations and line.startswith('- ') and ':' in line:
+                    # Parse: "- meaning: term1, term2"
+                    parts = line[2:].split(':', 1)
+                    if len(parts) == 2:
+                        meaning = parts[0].strip()
+                        terms = [t.strip() for t in parts[1].split(',')]
+                        interpretations.append({
+                            "meaning": meaning,
+                            "search_terms": terms
+                        })
+            
+            return {
+                "needs_clarification": needs_clarification,
+                "interpretations": interpretations,
+                "reasoning": reasoning,
+                "raw_response": result
+            }
+            
+    except Exception as e:
+        return {"needs_clarification": False, "reasoning": f"Error: {e}", "interpretations": []}
+
+
+async def clarify_search_terms(
+    terms: list[str],
+    ollama_url: str = "http://localhost:11434",
+    model: str = "qwen2.5"
+) -> list[str]:
+    """
+    Evaluate all search terms and interactively clarify any that would produce muddied eBay results.
+    
+    For each term:
+    1. LLM evaluates if eBay search would be muddied
+    2. If muddied, shows user the possible interpretations
+    3. User picks their intended meaning
+    4. Returns the optimized search terms for that meaning
+    
+    Returns list of clarified/optimized search terms.
+    """
+    final_terms = []
+    
+    for term in terms:
+        print(f"\n🔍 Evaluating: '{term}'...")
+        
+        result = await evaluate_search_term(term, ollama_url, model)
+        
+        if result.get('needs_clarification') and result.get('interpretations'):
+            interpretations = result['interpretations']
+            
+            print(f"\n⚠️  '{term}' would return mixed eBay results!")
+            print(f"   {result.get('reasoning', '')}")
+            print(f"\n   What did you mean?")
+            
+            for i, interp in enumerate(interpretations, 1):
+                meaning = interp['meaning']
+                terms_list = interp['search_terms']
+                print(f"   {i}. {meaning}")
+                print(f"      → Would search: {', '.join(terms_list[:3])}")
+            
+            print(f"   0. Skip this term")
+            
+            while True:
+                try:
+                    choice = input(f"\n   Choice (1-{len(interpretations)}, or 0 to skip): ").strip()
+                    if choice == '0':
+                        print(f"   → Skipped '{term}'")
+                        break
+                    
+                    choice_num = int(choice)
+                    if 1 <= choice_num <= len(interpretations):
+                        selected = interpretations[choice_num - 1]
+                        optimized = selected['search_terms']
+                        print(f"   → Using: {', '.join(optimized)}")
+                        final_terms.extend(optimized)
+                        break
+                    else:
+                        print(f"   Invalid choice. Enter 1-{len(interpretations)} or 0.")
+                except ValueError:
+                    print(f"   Invalid input. Enter a number.")
+        else:
+            # Term is clear, use as-is
+            print(f"   ✓ Clear search term")
+            final_terms.append(term)
+    
+    return final_terms
+
+
+def clarify_search_terms_sync(
+    terms: list[str],
+    ollama_url: str = "http://localhost:11434",
+    model: str = "qwen2.5"
+) -> list[str]:
+    """Synchronous wrapper for clarify_search_terms"""
+    return asyncio.run(clarify_search_terms(terms, ollama_url, model))
 
 
 if __name__ == "__main__":

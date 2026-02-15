@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scrapedface"
+version = "0.1.0"
+description = "FB Marketplace arbitrage scanner with stealth browser scraping"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.25.0",
+    "pydantic>=2.0.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+]
+
+[project.optional-dependencies]
+ai = [
+    "pillow>=10.0.0",
+]
+stealth = [
+    "psutil>=5.9.0",
+    "playwright>=1.40.0",
+    "fastmcp>=2.0.0",
+    "nodriver>=0.30.0",
+]
+all = ["scrapedface[ai,stealth]"]
+
+[project.scripts]
+scrapedface = "scanner:main"
+scrapedface-setup = "config:interactive_setup"
+
+[tool.setuptools.packages.find]
+include = ["*"]
+exclude = [".venv*", "reports*", "data*"]

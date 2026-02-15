@@ -86,7 +86,7 @@ class PriceLookupService:
         """Get or create AI matcher instance"""
         if self._ai_matcher is None:
             self._ai_matcher = AIItemMatcher(
-                min_overall_confidence=self.ai_min_confidence
+                match_threshold=self.ai_min_confidence
             )
         return self._ai_matcher
     

@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Optional
 
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_project_root = str(Path(__file__).parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from database import DB_PATH, get_connection
 from scrapers.ebay_scraper import EbayScraper
